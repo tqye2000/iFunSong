@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>iFunSong</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>iFunSong</h1>
+          <p id="statusText">Create a local lyric video project.</p>
+        </div>
+        <div class="topbar-actions">
+          <select id="projectSelect" aria-label="Saved projects"></select>
+          <button id="loadProjectBtn" type="button">Open</button>
+          <button id="newProjectBtn" type="button">New</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <aside class="sidebar" aria-label="Project setup">
+          <label class="field">
+            <span>Project name</span>
+            <input id="projectName" type="text" placeholder="Untitled song video">
+          </label>
+
+          <div class="upload-group">
+            <label class="upload-box">
+              <span>Audio</span>
+              <strong id="audioLabel">Choose MP3, WAV, or FFmpeg-readable audio</strong>
+              <input id="audioInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.aac,.ogg">
+            </label>
+            <audio id="audioPreview" controls></audio>
+            <p id="audioMeta" class="muted">No audio uploaded yet.</p>
+          </div>
+
+          <div class="upload-group">
+            <label class="upload-box">
+              <span>Images</span>
+              <strong>Choose JPG, PNG, or WEBP backgrounds</strong>
+              <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+            </label>
+            <div id="imageStrip" class="image-strip" aria-label="Uploaded image previews"></div>
+          </div>
+
+          <div class="actions">
+            <button id="saveProjectBtn" type="button">Save Project</button>
+            <button id="healthBtn" type="button">Check Tools</button>
+          </div>
+        </aside>
+
+        <section class="main-panel" aria-label="Lyrics and rendering">
+          <nav class="tabs" aria-label="Workflow sections">
+            <button class="tab active" data-tab="lyrics" type="button">Lyrics</button>
+            <button class="tab" data-tab="style" type="button">Style</button>
+            <button class="tab" data-tab="render" type="button">Render</button>
+          </nav>
+
+          <section id="lyricsTab" class="tab-panel active">
+            <div class="section-heading">
+              <div>
+                <h2>Lyrics</h2>
+                <p>Use embedded lyrics, draft timings from pasted lyrics, or continue with no lyrics.</p>
+              </div>
+              <select id="lyricMode" aria-label="Lyric mode">
+                <option value="auto">Auto extract/transcribe</option>
+                <option value="align">Align pasted lyrics</option>
+                <option value="none">No lyrics</option>
+              </select>
+            </div>
+
+            <label class="field">
+              <span>Lyric text</span>
+              <textarea id="rawLyrics" rows="8" placeholder="Paste lyrics here, one line per lyric line."></textarea>
+            </label>
+
+            <div class="actions">
+              <button id="extractLyricsBtn" type="button">Try Auto Extract</button>
+              <button id="draftLyricsBtn" type="button">Create Draft Timings</button>
+              <button id="addLyricLineBtn" type="button">Add Line</button>
+            </div>
+
+            <div class="lyrics-table-wrap">
+              <table class="lyrics-table">
+                <thead>
+                  <tr>
+                    <th>Start</th>
+                    <th>End</th>
+                    <th>Text</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="lyricsTableBody"></tbody>
+              </table>
+            </div>
+
+            <div class="actions">
+              <a id="srtLink" class="button-link" href="#" download>Download SRT</a>
+              <a id="lrcLink" class="button-link" href="#" download>Download LRC</a>
+            </div>
+          </section>
+
+          <section id="styleTab" class="tab-panel">
+            <div class="section-heading">
+              <div>
+                <h2>Layout And Style</h2>
+                <p>Pick the frame shape and readable burned-in lyric styling.</p>
+              </div>
+              <button id="smartStyleBtn" type="button">Smart Style</button>
+            </div>
+
+            <div class="control-grid">
+              <label class="field">
+                <span>Layout</span>
+                <select id="layoutMode">
+                  <option value="landscape">Landscape 16:9</option>
+                  <option value="portrait">Portrait 9:16</option>
+                  <option value="square">Square 1:1</option>
+                  <option value="auto">Auto from images</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Image fit</span>
+                <select id="imageFit">
+                  <option value="cover">Cover</option>
+                  <option value="contain">Contain</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Text position</span>
+                <select id="textPosition">
+                  <option value="bottom">Bottom</option>
+                  <option value="center">Center</option>
+                  <option value="top">Top</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Font size</span>
+                <input id="fontSize" type="number" min="18" max="140" step="1">
+              </label>
+              <label class="field">
+                <span>Text color</span>
+                <input id="textColor" type="color">
+              </label>
+              <label class="field">
+                <span>Outline color</span>
+                <input id="outlineColor" type="color">
+              </label>
+              <label class="field">
+                <span>Outline width</span>
+                <input id="outlineWidth" type="range" min="0" max="10" step="1">
+              </label>
+              <label class="field">
+                <span>Background dim</span>
+                <input id="backgroundDim" type="range" min="0" max="0.7" step="0.05">
+              </label>
+              <label class="check-row">
+                <input id="textShadow" type="checkbox">
+                <span>Shadow</span>
+              </label>
+            </div>
+
+            <div class="preview-stage">
+              <img id="previewImage" alt="" src="">
+              <div id="previewDim"></div>
+              <p id="previewLyric">Your lyric preview appears here</p>
+            </div>
+          </section>
+
+          <section id="renderTab" class="tab-panel">
+            <div class="section-heading">
+              <div>
+                <h2>Render</h2>
+                <p>Generate the MP4 with rotating images, audio, and burned-in lyrics.</p>
+              </div>
+              <button id="renderBtn" type="button">Render MP4</button>
+            </div>
+
+            <label class="field">
+              <span>No-lyrics text overlays</span>
+              <textarea id="textOverlays" rows="5" placeholder="Song title&#10;Artist&#10;Dedication or other free text"></textarea>
+            </label>
+
+            <div class="render-output">
+              <p id="renderStatus">No render yet.</p>
+              <a id="mp4Link" class="button-link hidden" href="#" download>Download MP4</a>
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
