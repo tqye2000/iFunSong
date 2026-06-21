@@ -234,6 +234,17 @@ Responsibilities:
 
 The API key should be stored locally and never embedded in the frontend bundle.
 
+Current implementation notes:
+
+- The server reads `OPENAI_API_KEY` from the environment or a local `.env` file.
+- The browser UI can also send an OpenAI API key for a single local request; it is stored only in browser `localStorage`, not in the project JSON.
+- The default model is `whisper-1` because the app needs verbose JSON segment timestamps for line timing.
+- Audio formats unsupported by the transcription endpoint are converted to MP3 with FFmpeg before transcription.
+- Extract mode uses transcribed segments directly as timed lyric lines.
+- Align mode transcribes the audio first, then maps pasted lyric lines onto the detected vocal segment timings by word-count proportion.
+- If requests fail with `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`, the local network is likely intercepting TLS. Prefer setting `NODE_EXTRA_CA_CERTS` to the trusted company/proxy root certificate. For local testing only, `OPENAI_TLS_REJECT_UNAUTHORIZED=false` disables TLS verification.
+- If the app reports a web security page such as Zscaler, the OpenAI API request is being blocked or held behind a browser-only caution page. The network/security policy must allow `https://api.openai.com` for API requests.
+
 ### Local Provider
 
 Start with an optional provider wrapper that can call an installed local command, such as `whisper.cpp` or `faster-whisper`, if detected/configured.
@@ -243,6 +254,12 @@ V1 can expose this as:
 - "Use local transcription if available"
 - Provider configuration path
 - Clear failure messages if the tool/model is missing
+
+Current local fallback contract:
+
+- Set `LOCAL_TRANSCRIPTION_COMMAND` in `.env` or the environment.
+- The command may use `{audio}` and `{output}` placeholders.
+- It must write JSON to `{output}` using either `segments[].start/end` seconds or `segments[].startMs/endMs` milliseconds.
 
 ## Frontend Screens
 
@@ -357,4 +374,3 @@ The first useful milestone should be:
 After that foundation works, add AI transcription/alignment.
 
 This order keeps the media pipeline testable before adding transcription complexity.
-

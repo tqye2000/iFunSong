@@ -325,6 +325,13 @@ p {
   gap: 16px;
 }
 
+.provider-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(160px, 0.8fr) minmax(220px, 1.4fr);
+  gap: 16px;
+  margin: 16px 0;
+}
+
 .check-row {
   display: flex;
   align-items: center;
@@ -407,6 +414,10 @@ p {
   }
 
   .control-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-grid {
     grid-template-columns: 1fr;
   }
 

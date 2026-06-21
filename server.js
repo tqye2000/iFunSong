@@ -6,11 +6,19 @@ const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 
 const ROOT = __dirname;
+loadEnvFile(path.join(ROOT, ".env"));
+const FETCH_NETWORK = configureFetchNetwork();
 const PUBLIC_DIR = path.join(ROOT, "public");
 const PROJECTS_DIR = path.join(ROOT, "projects");
 const PORT = Number(process.env.PORT || process.argv.find((arg) => arg.startsWith("--port="))?.split("=")[1] || 4173);
 const FFMPEG_PATH = resolveMediaTool("ffmpeg");
 const FFPROBE_PATH = resolveMediaTool("ffprobe");
+const OPENAI_API_BASE_URL = process.env.OPENAI_API_BASE_URL || "https://api.openai.com/v1";
+const OPENAI_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
+const OPENAI_TRANSCRIPTION_URL = process.env.OPENAI_TRANSCRIPTION_URL || `${OPENAI_API_BASE_URL}/audio/transcriptions`;
+const LOCAL_TRANSCRIPTION_COMMAND = process.env.LOCAL_TRANSCRIPTION_COMMAND || "";
+const OPENAI_AUDIO_EXTENSIONS = new Set([".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".wav", ".webm"]);
+const OPENAI_DIRECT_AUDIO_MAX_BYTES = Number(process.env.OPENAI_DIRECT_AUDIO_MAX_BYTES || 24 * 1024 * 1024);
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -55,6 +63,135 @@ const DEFAULT_RENDER = {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function loadEnvFile(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const raw = fs.readFileSync(filePath, "utf8");
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+    const index = trimmed.indexOf("=");
+    const key = trimmed.slice(0, index).trim();
+    let value = trimmed.slice(index + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (key && process.env[key] === undefined) process.env[key] = value;
+  }
+}
+
+function configureFetchNetwork() {
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
+  const rejectUnauthorized = !["0", "false", "no"].includes(String(process.env.OPENAI_TLS_REJECT_UNAUTHORIZED || "true").toLowerCase());
+  if (!proxyUrl && rejectUnauthorized) return { proxyConfigured: false, tlsRejectUnauthorized: true };
+
+  try {
+    const { Agent, ProxyAgent, setGlobalDispatcher } = require("undici");
+    if (proxyUrl) {
+      setGlobalDispatcher(new ProxyAgent({
+        uri: proxyUrl,
+        requestTls: { rejectUnauthorized },
+        proxyTls: { rejectUnauthorized }
+      }));
+      return { proxyConfigured: true, proxy: redactUrl(proxyUrl), tlsRejectUnauthorized: rejectUnauthorized };
+    }
+    setGlobalDispatcher(new Agent({ connect: { rejectUnauthorized } }));
+    return { proxyConfigured: false, tlsRejectUnauthorized: rejectUnauthorized };
+  } catch (error) {
+    return {
+      proxyConfigured: Boolean(proxyUrl),
+      proxy: proxyUrl ? redactUrl(proxyUrl) : undefined,
+      tlsRejectUnauthorized: rejectUnauthorized,
+      error: error.message
+    };
+  }
+}
+
+function redactUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.username) url.username = "***";
+    if (url.password) url.password = "***";
+    return url.toString();
+  } catch {
+    return String(value || "").replace(/\/\/[^@\s]+@/, "//***@");
+  }
+}
+
+function fetchErrorDetails(error) {
+  const cause = error?.cause || {};
+  return {
+    name: error?.name,
+    message: error?.message,
+    code: cause.code,
+    errno: cause.errno,
+    syscall: cause.syscall,
+    hostname: cause.hostname,
+    causeMessage: cause.message
+  };
+}
+
+function openAINetworkError(error) {
+  const details = fetchErrorDetails(error);
+  const reason = [details.code, details.causeMessage || details.message].filter(Boolean).join(": ");
+  return httpError(
+    502,
+    `Could not reach the OpenAI API. ${reason || "The network request failed."} Check your internet connection, firewall, or HTTPS_PROXY setting.`,
+    {
+      openAIBaseUrl: OPENAI_API_BASE_URL,
+      network: FETCH_NETWORK,
+      cause: details
+    }
+  );
+}
+
+async function fetchOpenAI(url, options) {
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: options?.signal || AbortSignal.timeout(Number(process.env.OPENAI_REQUEST_TIMEOUT_MS || 10 * 60 * 1000))
+    });
+  } catch (error) {
+    throw openAINetworkError(error);
+  }
+}
+
+function parseResponsePayload(responseText) {
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    return { text: responseText };
+  }
+}
+
+function summarizeHtmlOrText(text) {
+  const value = String(text || "");
+  const title = value.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  const description = value.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)?.[1];
+  const stripped = value
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (title || description || stripped || value).slice(0, 500);
+}
+
+function openAIResponseError(status, fallback, payload) {
+  const apiMessage = payload?.error?.message;
+  if (apiMessage) return httpError(status, apiMessage, payload);
+  if (payload?.text && /<html|<!doctype/i.test(payload.text)) {
+    return httpError(
+      status,
+      `OpenAI API request was intercepted or blocked by a web security page: ${summarizeHtmlOrText(payload.text)}`,
+      { textSummary: summarizeHtmlOrText(payload.text) }
+    );
+  }
+  if (payload?.text) {
+    return httpError(status, `${fallback}: ${summarizeHtmlOrText(payload.text)}`, { textSummary: summarizeHtmlOrText(payload.text) });
+  }
+  return httpError(status, fallback, payload);
 }
 
 function makeId(prefix = "id") {
@@ -418,6 +555,290 @@ function splitLyricsToTimedLines(text, durationMs) {
   }));
 }
 
+function getLyricTextLines(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function countWords(text) {
+  const words = String(text || "").toLowerCase().match(/[a-z0-9'’]+/gi);
+  return words ? words.length : 0;
+}
+
+function segmentsToTimedLyrics(segments, fallbackDurationMs) {
+  const normalized = (segments || [])
+    .map((segment, index) => {
+      const startMs = Math.max(0, Math.round(Number(segment.start) * 1000 || Number(segment.startMs) || 0));
+      const endMs = Math.max(startMs + 500, Math.round(Number(segment.end) * 1000 || Number(segment.endMs) || startMs + 3000));
+      return {
+        id: makeId("line"),
+        index,
+        startMs,
+        endMs,
+        text: String(segment.text || "").trim()
+      };
+    })
+    .filter((line) => line.text);
+
+  if (normalized.length > 0) return normalized;
+  return splitLyricsToTimedLines("", fallbackDurationMs);
+}
+
+function alignLyricLinesToSegments(rawLyrics, segments, fallbackDurationMs) {
+  const lyricLines = getLyricTextLines(rawLyrics);
+  if (lyricLines.length === 0) return segmentsToTimedLyrics(segments, fallbackDurationMs);
+
+  const usableSegments = (segments || [])
+    .map((segment) => ({
+      startMs: Math.max(0, Math.round(Number(segment.start) * 1000 || Number(segment.startMs) || 0)),
+      endMs: Math.max(0, Math.round(Number(segment.end) * 1000 || Number(segment.endMs) || 0)),
+      text: String(segment.text || "").trim(),
+      wordCount: Math.max(1, countWords(segment.text))
+    }))
+    .filter((segment) => segment.text && segment.endMs > segment.startMs);
+
+  if (usableSegments.length === 0) {
+    return splitLyricsToTimedLines(rawLyrics, fallbackDurationMs);
+  }
+
+  const totalSegmentWords = usableSegments.reduce((sum, segment) => sum + segment.wordCount, 0);
+  const totalLyricWords = lyricLines.reduce((sum, line) => sum + Math.max(1, countWords(line)), 0);
+  const result = [];
+  let segmentIndex = 0;
+  let consumedSegmentWords = 0;
+
+  for (let lineIndex = 0; lineIndex < lyricLines.length; lineIndex += 1) {
+    const line = lyricLines[lineIndex];
+    const lineWordCount = Math.max(1, countWords(line));
+    const targetSegmentWords = Math.max(1, Math.round((lineWordCount / totalLyricWords) * totalSegmentWords));
+    const startSegment = usableSegments[Math.min(segmentIndex, usableSegments.length - 1)];
+    let endSegment = startSegment;
+    let gathered = 0;
+
+    while (segmentIndex < usableSegments.length) {
+      endSegment = usableSegments[segmentIndex];
+      const remainingInSegment = endSegment.wordCount - consumedSegmentWords;
+      gathered += Math.max(1, remainingInSegment);
+      segmentIndex += 1;
+      consumedSegmentWords = 0;
+      if (gathered >= targetSegmentWords && lineIndex < lyricLines.length - 1) break;
+    }
+
+    if (lineIndex === lyricLines.length - 1) {
+      endSegment = usableSegments[usableSegments.length - 1];
+    }
+
+    const previous = result[result.length - 1];
+    const startMs = Math.max(previous ? previous.endMs + 20 : 0, startSegment.startMs);
+    const endMs = Math.max(startMs + 600, endSegment.endMs);
+    result.push({
+      id: makeId("line"),
+      index: lineIndex,
+      startMs,
+      endMs,
+      text: line
+    });
+  }
+
+  return result;
+}
+
+async function prepareAudioForOpenAI(project) {
+  if (!project.audio) throw httpError(400, "Upload an audio file before extracting lyrics.");
+  const originalPath = path.join(projectDir(project.id), project.audio.path);
+  const ext = path.extname(originalPath).toLowerCase();
+  const stat = await fsp.stat(originalPath);
+  if (OPENAI_AUDIO_EXTENSIONS.has(ext) && stat.size <= OPENAI_DIRECT_AUDIO_MAX_BYTES) {
+    return {
+      path: originalPath,
+      filename: project.audio.originalName || path.basename(originalPath),
+      cleanup: null
+    };
+  }
+
+  const ffmpeg = findTool(FFMPEG_PATH);
+  if (!ffmpeg.available) {
+    throw httpError(400, "This audio format needs FFmpeg conversion before OpenAI transcription, but FFmpeg is not available.", { ffmpeg });
+  }
+
+  const tempDir = path.join(projectDir(project.id), "tmp");
+  await fsp.mkdir(tempDir, { recursive: true });
+  const convertedPath = path.join(tempDir, `${makeId("transcribe")}.mp3`);
+  await runProcess(FFMPEG_PATH, [
+    "-y",
+    "-i", originalPath,
+    "-vn",
+    "-acodec", "libmp3lame",
+    "-ar", "44100",
+    "-ac", "2",
+    "-b:a", "192k",
+    convertedPath
+  ]);
+  return {
+    path: convertedPath,
+    filename: `${safeName(project.audio.originalName || "audio").replace(/\.[^.]+$/, "")}.mp3`,
+    cleanup: convertedPath
+  };
+}
+
+async function transcribeWithOpenAI(project, options = {}) {
+  const apiKey = String(options.apiKey || process.env.OPENAI_API_KEY || "").trim();
+  if (!apiKey) {
+    throw httpError(400, "No OpenAI API key was provided. Enter one in the UI or set OPENAI_API_KEY.");
+  }
+
+  const prepared = await prepareAudioForOpenAI(project);
+  try {
+    const audio = await fsp.readFile(prepared.path);
+    const form = new FormData();
+    form.append("file", new Blob([audio]), prepared.filename);
+    form.append("model", options.model || OPENAI_TRANSCRIPTION_MODEL);
+    form.append("response_format", "verbose_json");
+    form.append("timestamp_granularities[]", "segment");
+
+    const response = await fetchOpenAI(OPENAI_TRANSCRIPTION_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: form
+    });
+
+    const responseText = await response.text();
+    const payload = parseResponsePayload(responseText);
+
+    if (!response.ok) {
+      throw openAIResponseError(response.status, "OpenAI transcription request failed", payload);
+    }
+
+    const segments = Array.isArray(payload.segments) ? payload.segments : [];
+    return {
+      provider: "openai",
+      model: options.model || OPENAI_TRANSCRIPTION_MODEL,
+      text: String(payload.text || segments.map((segment) => segment.text).join("\n")).trim(),
+      segments
+    };
+  } finally {
+    if (prepared.cleanup) {
+      await fsp.rm(prepared.cleanup, { force: true }).catch(() => {});
+    }
+  }
+}
+
+async function checkOpenAIConnection(apiKey) {
+  const key = String(apiKey || process.env.OPENAI_API_KEY || "").trim();
+  if (!key) {
+    throw httpError(400, "No OpenAI API key was provided. Enter one in the UI or set OPENAI_API_KEY.");
+  }
+
+  const response = await fetchOpenAI(`${OPENAI_API_BASE_URL}/models`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${key}`
+    }
+  });
+  const responseText = await response.text();
+  const payload = parseResponsePayload(responseText);
+  if (!response.ok) {
+    throw openAIResponseError(response.status, "OpenAI API key check failed", payload);
+  }
+  return {
+    ok: true,
+    modelCount: Array.isArray(payload.data) ? payload.data.length : null
+  };
+}
+
+function parseCommandLine(commandLine) {
+  const args = [];
+  const pattern = /"([^"]*)"|'([^']*)'|([^\s]+)/g;
+  let match;
+  while ((match = pattern.exec(commandLine))) {
+    args.push(match[1] ?? match[2] ?? match[3]);
+  }
+  return args;
+}
+
+async function transcribeWithLocalCommand(project) {
+  if (!LOCAL_TRANSCRIPTION_COMMAND.trim()) {
+    throw httpError(400, "No local transcription command is configured. Set LOCAL_TRANSCRIPTION_COMMAND to enable local fallback.");
+  }
+  if (!project.audio) throw httpError(400, "Upload an audio file before extracting lyrics.");
+
+  const audioPath = path.join(projectDir(project.id), project.audio.path);
+  const outDir = path.join(projectDir(project.id), "tmp");
+  await fsp.mkdir(outDir, { recursive: true });
+  const outputPath = path.join(outDir, `${makeId("local-transcript")}.json`);
+  const commandLine = LOCAL_TRANSCRIPTION_COMMAND
+    .replaceAll("{audio}", audioPath)
+    .replaceAll("{output}", outputPath);
+  const [command, ...args] = parseCommandLine(commandLine);
+  if (!command) throw httpError(400, "LOCAL_TRANSCRIPTION_COMMAND is empty.");
+
+  try {
+    await runProcess(command, args, { cwd: projectDir(project.id) });
+    const raw = await fsp.readFile(outputPath, "utf8");
+    const payload = JSON.parse(raw);
+    const segments = Array.isArray(payload.segments) ? payload.segments : [];
+    return {
+      provider: "local",
+      model: command,
+      text: String(payload.text || segments.map((segment) => segment.text).join("\n")).trim(),
+      segments
+    };
+  } finally {
+    await fsp.rm(outputPath, { force: true }).catch(() => {});
+  }
+}
+
+async function transcribeAudio(project, options = {}) {
+  const provider = options.provider || "auto";
+  const errors = [];
+
+  const openAiFirst = provider === "openai" || (provider === "auto" && String(options.apiKey || process.env.OPENAI_API_KEY || "").trim());
+  if (openAiFirst) {
+    try {
+      return await transcribeWithOpenAI(project, options);
+    } catch (error) {
+      errors.push(error.message);
+      if (provider === "openai") throw error;
+    }
+  }
+
+  if (provider === "local" || provider === "auto") {
+    try {
+      return await transcribeWithLocalCommand(project);
+    } catch (error) {
+      errors.push(error.message);
+      if (provider === "local") throw error;
+    }
+  }
+
+  if (!openAiFirst && (provider === "openai" || provider === "auto")) {
+    try {
+      return await transcribeWithOpenAI(project, options);
+    } catch (error) {
+      errors.push(error.message);
+      if (provider === "openai") throw error;
+    }
+  }
+
+  throw httpError(400, `No transcription provider succeeded. ${errors.join(" ")}`.trim());
+}
+
+async function saveTranscriptArtifacts(project, transcript, mode) {
+  project.lyricMode = mode;
+  project.transcription = {
+    provider: transcript.provider,
+    model: transcript.model,
+    createdAt: nowIso(),
+    segmentCount: transcript.segments?.length || 0
+  };
+  await writeProject(project);
+  await writeSubtitleFiles(project);
+}
+
 async function writeSubtitleFiles(project) {
   const outDir = path.join(projectDir(project.id), "exports");
   await fsp.mkdir(outDir, { recursive: true });
@@ -568,8 +989,20 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       ok: true,
       ffmpeg: findTool(FFMPEG_PATH),
-      ffprobe: findTool(FFPROBE_PATH)
+      ffprobe: findTool(FFPROBE_PATH),
+      transcription: {
+        openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+        defaultOpenAIModel: OPENAI_TRANSCRIPTION_MODEL,
+        localCommandConfigured: Boolean(LOCAL_TRANSCRIPTION_COMMAND),
+        network: FETCH_NETWORK
+      }
     });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/openai/check") {
+    const body = await readJsonBody(req, 1024 * 1024);
+    const result = await checkOpenAIConnection(body.apiKey);
+    return sendJson(res, 200, result);
   }
 
   if (req.method === "GET" && url.pathname === "/api/projects") {
@@ -683,11 +1116,13 @@ async function handleApi(req, res, url) {
     await writeSubtitleFiles(project);
     return sendJson(res, 200, {
       project,
-      note: "Draft timings were spread evenly across the audio. AI transcription/alignment provider integration is planned for the next phase."
+      source: "even-draft",
+      note: "Draft timings were spread evenly across the audio."
     });
   }
 
   if (req.method === "POST" && segments[3] === "lyrics" && segments[4] === "extract") {
+    const body = await readJsonBody(req, 5 * 1024 * 1024);
     if (project.audio?.embeddedLyrics?.text) {
       project.rawLyrics = project.audio.embeddedLyrics.text;
       project.lyricMode = "auto";
@@ -700,7 +1135,41 @@ async function handleApi(req, res, url) {
         note: "Embedded lyrics were found. Timings were spread evenly because embedded timing was not detected."
       });
     }
-    throw httpError(501, "Automatic transcription is not implemented yet. Add lyrics manually for now, or configure an AI/local provider in the next phase.");
+
+    const transcript = await transcribeAudio(project, {
+      provider: body.provider || "auto",
+      apiKey: body.apiKey,
+      model: body.model || OPENAI_TRANSCRIPTION_MODEL
+    });
+    project.rawLyrics = transcript.text;
+    project.timedLyrics = segmentsToTimedLyrics(transcript.segments, project.audio?.durationMs);
+    await saveTranscriptArtifacts(project, transcript, "auto");
+    return sendJson(res, 200, {
+      project,
+      source: transcript.provider,
+      note: `Lyrics were transcribed with ${transcript.provider}${transcript.model ? ` (${transcript.model})` : ""}. Review timings before rendering.`
+    });
+  }
+
+  if (req.method === "POST" && segments[3] === "lyrics" && segments[4] === "align") {
+    const body = await readJsonBody(req, 5 * 1024 * 1024);
+    const rawLyrics = String(body.rawLyrics || project.rawLyrics || "");
+    if (!rawLyrics.trim()) {
+      throw httpError(400, "Paste lyric text before aligning it to the song.");
+    }
+    const transcript = await transcribeAudio(project, {
+      provider: body.provider || "auto",
+      apiKey: body.apiKey,
+      model: body.model || OPENAI_TRANSCRIPTION_MODEL
+    });
+    project.rawLyrics = rawLyrics;
+    project.timedLyrics = alignLyricLinesToSegments(rawLyrics, transcript.segments, project.audio?.durationMs);
+    await saveTranscriptArtifacts(project, transcript, "align");
+    return sendJson(res, 200, {
+      project,
+      source: transcript.provider,
+      note: `Pasted lyrics were aligned using ${transcript.provider}${transcript.model ? ` (${transcript.model})` : ""}. Review timings before rendering.`
+    });
   }
 
   if (req.method === "PUT" && segments[3] === "lyrics") {

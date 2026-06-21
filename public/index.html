@@ -77,8 +77,29 @@
               <textarea id="rawLyrics" rows="8" placeholder="Paste lyrics here, one line per lyric line."></textarea>
             </label>
 
+            <div class="provider-grid">
+              <label class="field">
+                <span>Transcription provider</span>
+                <select id="transcriptionProvider">
+                  <option value="auto">Auto</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="local">Local command</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>OpenAI model</span>
+                <input id="openAIModel" type="text" value="whisper-1" placeholder="whisper-1">
+              </label>
+              <label class="field">
+                <span>OpenAI API key</span>
+                <input id="openAIKey" type="password" autocomplete="off" placeholder="Stored only in this browser">
+              </label>
+            </div>
+
             <div class="actions">
               <button id="extractLyricsBtn" type="button">Try Auto Extract</button>
+              <button id="alignLyricsBtn" type="button">Align With Audio</button>
+              <button id="testOpenAIBtn" type="button">Test OpenAI</button>
               <button id="draftLyricsBtn" type="button">Create Draft Timings</button>
               <button id="addLyricLineBtn" type="button">Add Line</button>
             </div>

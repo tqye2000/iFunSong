@@ -25,7 +25,12 @@ const els = {
   },
   lyricMode: document.querySelector("#lyricMode"),
   rawLyrics: document.querySelector("#rawLyrics"),
+  transcriptionProvider: document.querySelector("#transcriptionProvider"),
+  openAIModel: document.querySelector("#openAIModel"),
+  openAIKey: document.querySelector("#openAIKey"),
   extractLyricsBtn: document.querySelector("#extractLyricsBtn"),
+  alignLyricsBtn: document.querySelector("#alignLyricsBtn"),
+  testOpenAIBtn: document.querySelector("#testOpenAIBtn"),
   draftLyricsBtn: document.querySelector("#draftLyricsBtn"),
   addLyricLineBtn: document.querySelector("#addLyricLineBtn"),
   lyricsTableBody: document.querySelector("#lyricsTableBody"),
@@ -151,6 +156,28 @@ function pullFormIntoProject() {
     .map((text, index) => ({ id: `overlay_${index}`, text }));
   state.project.layout = layoutFromForm();
   state.project.style = styleFromForm();
+}
+
+function transcriptionOptions() {
+  const apiKey = els.openAIKey.value.trim();
+  if (apiKey) {
+    localStorage.setItem("ifunsong.openaiKey", apiKey);
+  } else {
+    localStorage.removeItem("ifunsong.openaiKey");
+  }
+  localStorage.setItem("ifunsong.openaiModel", els.openAIModel.value.trim() || "whisper-1");
+  localStorage.setItem("ifunsong.transcriptionProvider", els.transcriptionProvider.value || "auto");
+  return {
+    provider: els.transcriptionProvider.value || "auto",
+    model: els.openAIModel.value.trim() || "whisper-1",
+    apiKey
+  };
+}
+
+function loadTranscriptionPrefs() {
+  els.openAIKey.value = localStorage.getItem("ifunsong.openaiKey") || "";
+  els.openAIModel.value = localStorage.getItem("ifunsong.openaiModel") || "whisper-1";
+  els.transcriptionProvider.value = localStorage.getItem("ifunsong.transcriptionProvider") || "auto";
 }
 
 function fillStyleForm(project) {
@@ -372,14 +399,45 @@ async function draftLyrics() {
 
 async function extractLyrics() {
   if (!state.project) await createProject();
-  setStatus("Checking embedded lyrics...");
+  setStatus("Checking embedded lyrics, then transcription providers...");
   try {
     const payload = await api(`/api/projects/${encodeURIComponent(currentProjectId())}/lyrics/extract`, {
       method: "POST",
-      body: JSON.stringify({})
+      body: JSON.stringify(transcriptionOptions())
     });
     setProject(payload.project);
     setStatus(payload.note || "Lyrics extracted.");
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function alignLyrics() {
+  if (!state.project) await createProject();
+  setStatus("Transcribing audio and aligning pasted lyrics...");
+  try {
+    const payload = await api(`/api/projects/${encodeURIComponent(currentProjectId())}/lyrics/align`, {
+      method: "POST",
+      body: JSON.stringify({
+        rawLyrics: els.rawLyrics.value,
+        ...transcriptionOptions()
+      })
+    });
+    setProject(payload.project);
+    setStatus(payload.note || "Lyrics aligned.");
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function testOpenAI() {
+  setStatus("Testing OpenAI connection...");
+  try {
+    const payload = await api("/api/openai/check", {
+      method: "POST",
+      body: JSON.stringify(transcriptionOptions())
+    });
+    setStatus(`OpenAI connection works${payload.modelCount ? ` (${payload.modelCount} models visible)` : ""}.`);
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -477,7 +535,11 @@ async function checkTools() {
   const payload = await api("/api/health");
   const ffmpeg = payload.ffmpeg.available ? "FFmpeg available" : "FFmpeg missing";
   const ffprobe = payload.ffprobe.available ? "FFprobe available" : "FFprobe missing";
-  setStatus(`${ffmpeg}. ${ffprobe}.`, !payload.ffmpeg.available || !payload.ffprobe.available);
+  const openai = payload.transcription?.openaiConfigured ? "OpenAI key on server" : "OpenAI key not on server";
+  const local = payload.transcription?.localCommandConfigured ? "local transcription configured" : "local transcription not configured";
+  const proxy = payload.transcription?.network?.proxyConfigured ? "proxy configured" : "proxy not configured";
+  const tls = payload.transcription?.network?.tlsRejectUnauthorized === false ? "TLS verification disabled" : "TLS verification on";
+  setStatus(`${ffmpeg}. ${ffprobe}. ${openai}; ${local}; ${proxy}; ${tls}.`, !payload.ffmpeg.available || !payload.ffprobe.available);
 }
 
 function applySmartStyle() {
@@ -542,6 +604,8 @@ function bindEvents() {
   els.audioInput.addEventListener("change", () => uploadAudio().catch(showError));
   els.imageInput.addEventListener("change", () => uploadImages().catch(showError));
   els.extractLyricsBtn.addEventListener("click", () => extractLyrics().catch(showError));
+  els.alignLyricsBtn.addEventListener("click", () => alignLyrics().catch(showError));
+  els.testOpenAIBtn.addEventListener("click", () => testOpenAI().catch(showError));
   els.draftLyricsBtn.addEventListener("click", () => draftLyrics().catch(showError));
   els.addLyricLineBtn.addEventListener("click", () => {
     const lines = readLyricsTable();
@@ -574,6 +638,9 @@ function bindEvents() {
       updatePreview();
     });
   }
+  for (const input of [els.transcriptionProvider, els.openAIModel, els.openAIKey]) {
+    input.addEventListener("change", transcriptionOptions);
+  }
   window.addEventListener("beforeunload", () => {
     pullFormIntoProject();
   });
@@ -586,6 +653,7 @@ function showError(error) {
 
 async function init() {
   bindEvents();
+  loadTranscriptionPrefs();
   await loadProjectList();
   if (state.projects[0]) {
     els.projectSelect.value = state.projects[0].id;
