@@ -81,28 +81,48 @@ function loadEnvFile(filePath) {
   }
 }
 
+function loadExtraCaCerts() {
+  // NODE_EXTRA_CA_CERTS is only honored by Node at process startup, before .env is
+  // loaded. Re-read it here so a CA path set in .env actually takes effect for the
+  // outbound dispatcher (the usual fix for "unable to get local issuer certificate").
+  const caPath = process.env.OPENAI_CA_CERT || process.env.NODE_EXTRA_CA_CERTS;
+  if (!caPath) return { ca: undefined };
+  try {
+    const ca = fs.readFileSync(caPath, "utf8");
+    return { ca, caPath };
+  } catch (error) {
+    return { ca: undefined, caPath, caError: error.message };
+  }
+}
+
 function configureFetchNetwork() {
   const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
   const rejectUnauthorized = !["0", "false", "no"].includes(String(process.env.OPENAI_TLS_REJECT_UNAUTHORIZED || "true").toLowerCase());
-  if (!proxyUrl && rejectUnauthorized) return { proxyConfigured: false, tlsRejectUnauthorized: true };
+  const { ca, caPath, caError } = loadExtraCaCerts();
+  if (!proxyUrl && rejectUnauthorized && !ca) {
+    return { proxyConfigured: false, tlsRejectUnauthorized: true, caPath, caError };
+  }
 
+  const tls = ca ? { rejectUnauthorized, ca } : { rejectUnauthorized };
   try {
     const { Agent, ProxyAgent, setGlobalDispatcher } = require("undici");
     if (proxyUrl) {
       setGlobalDispatcher(new ProxyAgent({
         uri: proxyUrl,
-        requestTls: { rejectUnauthorized },
-        proxyTls: { rejectUnauthorized }
+        requestTls: tls,
+        proxyTls: tls
       }));
-      return { proxyConfigured: true, proxy: redactUrl(proxyUrl), tlsRejectUnauthorized: rejectUnauthorized };
+      return { proxyConfigured: true, proxy: redactUrl(proxyUrl), tlsRejectUnauthorized: rejectUnauthorized, caPath, caError };
     }
-    setGlobalDispatcher(new Agent({ connect: { rejectUnauthorized } }));
-    return { proxyConfigured: false, tlsRejectUnauthorized: rejectUnauthorized };
+    setGlobalDispatcher(new Agent({ connect: tls }));
+    return { proxyConfigured: false, tlsRejectUnauthorized: rejectUnauthorized, caPath, caError };
   } catch (error) {
     return {
       proxyConfigured: Boolean(proxyUrl),
       proxy: proxyUrl ? redactUrl(proxyUrl) : undefined,
       tlsRejectUnauthorized: rejectUnauthorized,
+      caPath,
+      caError,
       error: error.message
     };
   }
