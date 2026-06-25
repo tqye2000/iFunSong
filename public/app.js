@@ -258,11 +258,25 @@ function renderMediaSummary() {
 
   els.imageStrip.innerHTML = "";
   for (const image of project.images || []) {
+    const figure = document.createElement("figure");
+    figure.className = "image-thumb";
+
     const img = document.createElement("img");
     img.src = image.url;
     img.alt = image.originalName;
     img.title = `${image.originalName}${image.width ? ` (${image.width}x${image.height})` : ""}`;
-    els.imageStrip.append(img);
+    figure.append(img);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "image-remove";
+    removeBtn.textContent = "×";
+    removeBtn.title = `Remove ${image.originalName}`;
+    removeBtn.setAttribute("aria-label", `Remove ${image.originalName}`);
+    removeBtn.addEventListener("click", () => removeImage(image).catch(showError));
+    figure.append(removeBtn);
+
+    els.imageStrip.append(figure);
   }
 }
 
@@ -376,6 +390,19 @@ async function uploadImages() {
   setProject(payload.project);
   await loadProjectList();
   setStatus("Images uploaded.");
+}
+
+async function removeImage(image) {
+  if (!state.project || !image?.id) return;
+  if (!confirm(`Remove "${image.originalName}"?`)) return;
+  setStatus(`Removing ${image.originalName}...`);
+  const payload = await api(
+    `/api/projects/${encodeURIComponent(currentProjectId())}/images/${encodeURIComponent(image.id)}`,
+    { method: "DELETE" }
+  );
+  setProject(payload.project);
+  await loadProjectList();
+  setStatus("Image removed.");
 }
 
 function fileToPayload(file) {

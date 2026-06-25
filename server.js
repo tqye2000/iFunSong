@@ -1189,6 +1189,23 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { project, images: savedImages });
   }
 
+  if (req.method === "DELETE" && segments[3] === "images" && segments[4]) {
+    const imageId = segments[4];
+    const images = project.images || [];
+    const target = images.find((image) => image.id === imageId);
+    if (!target) throw httpError(404, "Image not found.");
+    if (target.path) {
+      const assetPath = ensureInside(projectDir(project.id), path.join(projectDir(project.id), target.path));
+      await fsp.rm(assetPath, { force: true });
+    }
+    project.images = images.filter((image) => image.id !== imageId);
+    if (project.layout?.mode === "auto") {
+      project.layout = suggestAutoLayout(project);
+    }
+    await writeProject(project);
+    return sendJson(res, 200, { project });
+  }
+
   if (req.method === "GET" && segments[3] === "asset") {
     const relativePath = segments.slice(4).join("/");
     const assetPath = ensureInside(projectDir(project.id), path.join(projectDir(project.id), relativePath));
