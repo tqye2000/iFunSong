@@ -47,6 +47,8 @@ const els = {
   outlineWidth: document.querySelector("#outlineWidth"),
   backgroundDim: document.querySelector("#backgroundDim"),
   textShadow: document.querySelector("#textShadow"),
+  karaokeMode: document.querySelector("#karaokeMode"),
+  karaokeColor: document.querySelector("#karaokeColor"),
   smartStyleBtn: document.querySelector("#smartStyleBtn"),
   previewImage: document.querySelector("#previewImage"),
   previewDim: document.querySelector("#previewDim"),
@@ -194,6 +196,8 @@ function fillStyleForm(project) {
   els.outlineWidth.value = style.outlineWidth ?? 3;
   els.backgroundDim.value = style.backgroundDim ?? 0.25;
   els.textShadow.checked = style.shadow !== false;
+  els.karaokeMode.checked = style.karaoke === true;
+  els.karaokeColor.value = style.karaokeColor || "#ffd54a";
 }
 
 function layoutFromForm() {
@@ -230,7 +234,9 @@ function styleFromForm() {
     outlineWidth: Number(els.outlineWidth.value) || 0,
     shadow: els.textShadow.checked,
     position: els.textPosition.value,
-    backgroundDim: Number(els.backgroundDim.value) || 0
+    backgroundDim: Number(els.backgroundDim.value) || 0,
+    karaoke: els.karaokeMode.checked,
+    karaokeColor: els.karaokeColor.value
   };
 }
 
@@ -571,7 +577,7 @@ function updatePreview() {
   const stage = document.querySelector(".preview-stage");
   stage.style.aspectRatio = `${layout.width} / ${layout.height}`;
   els.previewDim.style.background = `rgba(0, 0, 0, ${style.backgroundDim})`;
-  els.previewLyric.style.color = style.color;
+  els.previewLyric.style.color = style.karaoke ? style.karaokeColor : style.color;
   els.previewLyric.style.fontSize = `${Math.max(18, Math.round(style.fontSize * 0.62))}px`;
   els.previewLyric.style.textShadow = style.shadow
     ? `0 2px 10px rgba(0,0,0,0.9), 0 0 2px ${style.outlineColor}`
@@ -694,6 +700,8 @@ function bindEvents() {
     els.outlineWidth,
     els.backgroundDim,
     els.textShadow,
+    els.karaokeMode,
+    els.karaokeColor,
     els.textOverlays
   ]) {
     input.addEventListener("input", () => {

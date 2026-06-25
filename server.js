@@ -43,7 +43,9 @@ const DEFAULT_STYLE = {
   outlineWidth: 3,
   shadow: true,
   position: "bottom",
-  backgroundDim: 0.25
+  backgroundDim: 0.25,
+  karaoke: false,
+  karaokeColor: "#ffd54a"
 };
 
 const DEFAULT_LAYOUT = {
@@ -547,15 +549,32 @@ function lyricsToLrc(lines = []) {
     .concat("\n");
 }
 
+function normalizeWordTimings(words) {
+  if (!Array.isArray(words)) return undefined;
+  const normalized = words
+    .map((word) => {
+      const startMs = Math.max(0, Math.round(Number(word.startMs) || Number(word.start) * 1000 || 0));
+      const endMs = Math.max(0, Math.round(Number(word.endMs) || Number(word.end) * 1000 || 0));
+      return { text: String(word.text || word.word || ""), startMs, endMs };
+    })
+    .filter((word) => word.text.trim() && word.endMs > word.startMs);
+  return normalized.length ? normalized : undefined;
+}
+
 function normalizeTimedLyrics(lines) {
   if (!Array.isArray(lines)) return [];
-  return lines.map((line, index) => ({
-    id: line.id || makeId("line"),
-    index,
-    startMs: Math.max(0, Math.round(Number(line.startMs) || 0)),
-    endMs: Math.max(0, Math.round(Number(line.endMs) || 0)),
-    text: String(line.text || "")
-  }));
+  return lines.map((line, index) => {
+    const normalized = {
+      id: line.id || makeId("line"),
+      index,
+      startMs: Math.max(0, Math.round(Number(line.startMs) || 0)),
+      endMs: Math.max(0, Math.round(Number(line.endMs) || 0)),
+      text: String(line.text || "")
+    };
+    const words = normalizeWordTimings(line.words);
+    if (words) normalized.words = words;
+    return normalized;
+  });
 }
 
 function splitLyricsToTimedLines(text, durationMs) {
@@ -585,6 +604,16 @@ function getLyricTextLines(text) {
 function countWords(text) {
   const words = String(text || "").toLowerCase().match(/[a-z0-9'’]+/gi);
   return words ? words.length : 0;
+}
+
+function attachWordTimings(lines, words) {
+  const normalized = normalizeWordTimings(words);
+  if (!normalized) return lines;
+  return lines.map((line) => {
+    const inside = normalized.filter((word) => word.startMs >= line.startMs - 250 && word.startMs < line.endMs + 250);
+    if (inside.length === 0) return line;
+    return { ...line, words: inside };
+  });
 }
 
 function segmentsToTimedLyrics(segments, fallbackDurationMs) {
@@ -717,6 +746,7 @@ async function transcribeWithOpenAI(project, options = {}) {
     form.append("model", options.model || OPENAI_TRANSCRIPTION_MODEL);
     form.append("response_format", "verbose_json");
     form.append("timestamp_granularities[]", "segment");
+    form.append("timestamp_granularities[]", "word");
 
     const response = await fetchOpenAI(OPENAI_TRANSCRIPTION_URL, {
       method: "POST",
@@ -738,7 +768,8 @@ async function transcribeWithOpenAI(project, options = {}) {
       provider: "openai",
       model: options.model || OPENAI_TRANSCRIPTION_MODEL,
       text: String(payload.text || segments.map((segment) => segment.text).join("\n")).trim(),
-      segments
+      segments,
+      words: Array.isArray(payload.words) ? payload.words : []
     };
   } finally {
     if (prepared.cleanup) {
@@ -805,7 +836,8 @@ async function transcribeWithLocalCommand(project) {
       provider: "local",
       model: command,
       text: String(payload.text || segments.map((segment) => segment.text).join("\n")).trim(),
-      segments
+      segments,
+      words: Array.isArray(payload.words) ? payload.words : []
     };
   } finally {
     await fsp.rm(outputPath, { force: true }).catch(() => {});
@@ -883,6 +915,45 @@ function escapeAss(text) {
   return String(text || "").replace(/[{}]/g, "").replace(/\r?\n/g, "\\N");
 }
 
+function splitKaraokeTokens(text) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean) return [];
+  if (clean.includes(" ")) {
+    const parts = clean.split(" ");
+    return parts.map((word, index) => (index < parts.length - 1 ? `${word} ` : word));
+  }
+  return Array.from(clean);
+}
+
+function karaokeSegments(line) {
+  if (Array.isArray(line.words) && line.words.length > 0) {
+    const segments = [];
+    if (Number(line.words[0].startMs) > Number(line.startMs)) {
+      segments.push({ text: "", durMs: Number(line.words[0].startMs) - Number(line.startMs) });
+    }
+    for (const word of line.words) {
+      const durMs = Math.max(60, Number(word.endMs) - Number(word.startMs));
+      const spaced = /[A-Za-z0-9]$/.test(word.text) ? `${word.text} ` : word.text;
+      segments.push({ text: spaced, durMs });
+    }
+    return segments;
+  }
+  const tokens = splitKaraokeTokens(line.text);
+  if (tokens.length === 0) return [];
+  const totalMs = Math.max(200, Number(line.endMs) - Number(line.startMs));
+  const perToken = totalMs / tokens.length;
+  return tokens.map((token) => ({ text: token, durMs: perToken }));
+}
+
+function lyricLineToAssText(line, style) {
+  if (!style.karaoke) return escapeAss(line.text);
+  const segments = karaokeSegments(line);
+  if (segments.length === 0) return escapeAss(line.text);
+  return segments
+    .map((segment) => `{\\kf${Math.max(1, Math.round(segment.durMs / 10))}}${escapeAss(segment.text)}`)
+    .join("");
+}
+
 function lyricsToAss(project) {
   const layout = project.layout || DEFAULT_LAYOUT;
   const style = project.style || DEFAULT_STYLE;
@@ -892,6 +963,8 @@ function lyricsToAss(project) {
   const shadow = style.shadow ? 2 : 0;
   const fontSize = Math.max(18, Number(style.fontSize) || DEFAULT_STYLE.fontSize);
   const outlineWidth = Math.max(0, Number(style.outlineWidth) || 0);
+  const sungColor = style.karaoke ? (style.karaokeColor || DEFAULT_STYLE.karaokeColor) : style.color;
+  const unsungColor = style.color;
   const lines = [
     "[Script Info]",
     "ScriptType: v4.00+",
@@ -900,7 +973,7 @@ function lyricsToAss(project) {
     "",
     "[V4+ Styles]",
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    `Style: Default,${style.fontFamily || "Arial"},${fontSize},${assColor(style.color)},${assColor(style.color)},${assColor(style.outlineColor)},&H80000000,0,0,0,0,100,100,0,0,1,${outlineWidth},${shadow},${alignment},80,80,${marginV},1`,
+    `Style: Default,${style.fontFamily || "Arial"},${fontSize},${assColor(sungColor)},${assColor(unsungColor)},${assColor(style.outlineColor)},&H80000000,0,0,0,0,100,100,0,0,1,${outlineWidth},${shadow},${alignment},80,80,${marginV},1`,
     "",
     "[Events]",
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
@@ -908,7 +981,7 @@ function lyricsToAss(project) {
   const lyricLines = project.timedLyrics || [];
   for (const line of lyricLines) {
     if (!String(line.text || "").trim()) continue;
-    lines.push(`Dialogue: 0,${msToClock(line.startMs, ".").slice(0, -1)},${msToClock(line.endMs, ".").slice(0, -1)},Default,,0,0,0,,${escapeAss(line.text)}`);
+    lines.push(`Dialogue: 0,${msToClock(line.startMs, ".").slice(0, -1)},${msToClock(line.endMs, ".").slice(0, -1)},Default,,0,0,0,,${lyricLineToAssText(line, style)}`);
   }
   if (lyricLines.length === 0 && Array.isArray(project.textOverlays) && project.textOverlays.length > 0) {
     const text = project.textOverlays.map((overlay) => overlay.text).filter(Boolean).join("\\N");
@@ -1162,7 +1235,10 @@ async function handleApi(req, res, url) {
       model: body.model || OPENAI_TRANSCRIPTION_MODEL
     });
     project.rawLyrics = transcript.text;
-    project.timedLyrics = segmentsToTimedLyrics(transcript.segments, project.audio?.durationMs);
+    project.timedLyrics = attachWordTimings(
+      segmentsToTimedLyrics(transcript.segments, project.audio?.durationMs),
+      transcript.words
+    );
     await saveTranscriptArtifacts(project, transcript, "auto");
     return sendJson(res, 200, {
       project,
@@ -1290,3 +1366,5 @@ ensureDirs()
     console.error(error);
     process.exit(1);
   });
+
+module.exports = { lyricsToAss, attachWordTimings, normalizeTimedLyrics };
