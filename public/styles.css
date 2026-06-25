@@ -52,6 +52,12 @@ button:hover,
   border-color: var(--accent-strong);
 }
 
+.button-link.disabled {
+  pointer-events: none;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 button.secondary {
   background: #fff;
   color: var(--accent);

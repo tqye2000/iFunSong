@@ -554,6 +554,7 @@ async function renderVideo() {
   els.renderBtn.disabled = true;
   els.renderStatus.textContent = "Rendering. FFmpeg can take a while for full-length songs.";
   setStatus("Rendering MP4...");
+  setDownloadDisabled(true);
   try {
     const payload = await api(`/api/projects/${encodeURIComponent(currentProjectId())}/render`, {
       method: "POST",
@@ -567,7 +568,13 @@ async function renderVideo() {
     setStatus(error.message, true);
   } finally {
     els.renderBtn.disabled = false;
+    setDownloadDisabled(false);
   }
+}
+
+function setDownloadDisabled(disabled) {
+  els.mp4Link.classList.toggle("disabled", disabled);
+  els.mp4Link.setAttribute("aria-disabled", disabled ? "true" : "false");
 }
 
 function updateDownloadLinks() {
@@ -710,6 +717,9 @@ function bindEvents() {
   els.importLrcBtn.addEventListener("click", () => els.lrcInput.click());
   els.lrcInput.addEventListener("change", () => importLrcFile().catch(showError));
   els.renderBtn.addEventListener("click", () => renderVideo().catch(showError));
+  els.mp4Link.addEventListener("click", (event) => {
+    if (els.mp4Link.classList.contains("disabled")) event.preventDefault();
+  });
   els.smartStyleBtn.addEventListener("click", applySmartStyle);
   for (const tab of els.tabs) {
     tab.addEventListener("click", () => switchTab(tab.dataset.tab));
