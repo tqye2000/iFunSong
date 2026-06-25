@@ -4,8 +4,7 @@ English | [中文](README.zh-CN.md)
 
 iFunSong is a local web app for creating MP4 lyric/music videos from an audio file, one or more images, and optional lyrics.
 
-[![初恋的地方 sample video](samples/images/place%20of%20first%20love.png)](samples/初恋的地方-video.mp4)
-
+<a href="samples/初恋的地方-video.mp4"><img src="samples/images/place%20of%20first%20love.png" alt="初恋的地方 sample video" width="600" height="600"></a>
 
 The app can:
 
@@ -69,7 +68,7 @@ http://localhost:4173
 
 - [初恋的地方 sample video](samples/初恋的地方-video.mp4)
 
-[![初恋的地方 sample video](samples/images/place%20of%20first%20love.png)](samples/初恋的地方-video.mp4)
+<a href="samples/初恋的地方-video.mp4"><img src="samples/images/place%20of%20first%20love.png" alt="初恋的地方 sample video" width="600" height="600"></a>
 
 ## Supported Inputs
 
