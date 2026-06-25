@@ -33,6 +33,8 @@ const els = {
   testOpenAIBtn: document.querySelector("#testOpenAIBtn"),
   draftLyricsBtn: document.querySelector("#draftLyricsBtn"),
   addLyricLineBtn: document.querySelector("#addLyricLineBtn"),
+  importLrcBtn: document.querySelector("#importLrcBtn"),
+  lrcInput: document.querySelector("#lrcInput"),
   lyricsTableBody: document.querySelector("#lyricsTableBody"),
   srtLink: document.querySelector("#srtLink"),
   lrcLink: document.querySelector("#lrcLink"),
@@ -386,6 +388,65 @@ function fileToPayload(file) {
   });
 }
 
+function parseLrc(text) {
+  const timeTag = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+  const entries = [];
+  let offsetMs = 0;
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const offsetMatch = raw.match(/^\s*\[offset:\s*([+-]?\d+)\s*\]/i);
+    if (offsetMatch) {
+      offsetMs = Number(offsetMatch[1]) || 0;
+      continue;
+    }
+    const times = [];
+    let match;
+    timeTag.lastIndex = 0;
+    while ((match = timeTag.exec(raw))) {
+      const minutes = Number(match[1]);
+      const seconds = Number(match[2]);
+      const fraction = match[3] ? Number(String(match[3]).padEnd(3, "0").slice(0, 3)) : 0;
+      times.push(minutes * 60000 + seconds * 1000 + fraction);
+    }
+    if (!times.length) continue;
+    const content = raw.replace(timeTag, "").trim();
+    if (!content) continue;
+    for (const start of times) {
+      entries.push({ startMs: Math.max(0, start + offsetMs), text: content });
+    }
+  }
+  entries.sort((a, b) => a.startMs - b.startMs);
+  return entries.map((entry, index) => {
+    const next = entries[index + 1];
+    const endMs = next ? Math.max(entry.startMs + 500, next.startMs) : entry.startMs + 4000;
+    return { startMs: entry.startMs, endMs, text: entry.text };
+  });
+}
+
+async function importLrcFile() {
+  const file = els.lrcInput.files?.[0];
+  els.lrcInput.value = "";
+  if (!file) return;
+  if (!state.project) await createProject();
+  setStatus(`Importing ${file.name}...`);
+  const parsed = parseLrc(await file.text());
+  if (!parsed.length) {
+    setStatus("No timed lyric lines were found in that LRC file.", true);
+    return;
+  }
+  state.project.timedLyrics = parsed.map((line, index) => ({
+    id: crypto.randomUUID(),
+    index,
+    startMs: line.startMs,
+    endMs: line.endMs,
+    text: line.text
+  }));
+  els.lyricMode.value = "align";
+  els.rawLyrics.value = parsed.map((line) => line.text).join("\n");
+  renderLyricsTable();
+  await saveProject();
+  setStatus(`Imported ${parsed.length} lyric line${parsed.length === 1 ? "" : "s"} from ${file.name}.`);
+}
+
 async function draftLyrics() {
   if (!state.project) await createProject();
   setStatus("Creating draft timings...");
@@ -613,6 +674,8 @@ function bindEvents() {
     addLyricRow({ startMs: lastEnd, endMs: lastEnd + 3000, text: "" });
     pullFormIntoProject();
   });
+  els.importLrcBtn.addEventListener("click", () => els.lrcInput.click());
+  els.lrcInput.addEventListener("change", () => importLrcFile().catch(showError));
   els.renderBtn.addEventListener("click", () => renderVideo().catch(showError));
   els.smartStyleBtn.addEventListener("click", applySmartStyle);
   for (const tab of els.tabs) {
