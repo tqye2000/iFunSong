@@ -3,7 +3,9 @@
 [English](README.md) | 中文
 
 iFunSong 是一个本地 Web 应用，可通过一个音频文件、一张或多张图片，以及可选歌词，制作 MP4 歌词/音乐视频。
-[初恋的地方示例视频](samples/初恋的地方-video.mp4)
+
+<a href="samples/初恋的地方-video.mp4"><img src="samples/images/place%20of%20first%20love.png" alt="初恋的地方 sample video" width="600" height="600"></a>
+
 
 应用可以：
 
@@ -66,6 +68,8 @@ http://localhost:4173
 ## 示例
 
 - [初恋的地方示例视频](samples/初恋的地方-video.mp4)
+
+<a href="samples/初恋的地方-video.mp4"><img src="samples/images/place%20of%20first%20love.png" alt="初恋的地方 sample video" width="600" height="600"></a>
 
 ## 支持的输入
 
