@@ -14,6 +14,11 @@
           <p id="statusText">Create a local lyric video project.</p>
         </div>
         <div class="topbar-actions">
+          <div class="language-switch" aria-label="Interface language">
+            <button class="language-link" data-language="en" type="button">English</button>
+            <span aria-hidden="true">|</span>
+            <button class="language-link" data-language="zh-CN" type="button">中文</button>
+          </div>
           <select id="projectSelect" aria-label="Saved projects"></select>
           <button id="loadProjectBtn" type="button">Open</button>
           <button id="newProjectBtn" type="button">New</button>
@@ -43,6 +48,21 @@
               <strong>Choose JPG, PNG, or WEBP backgrounds</strong>
               <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp" multiple>
             </label>
+            <div class="ai-image-panel">
+              <label class="field">
+                <span>AI image source</span>
+                <select id="aiImageSource">
+                  <option value="both">Project title and lyrics</option>
+                  <option value="title">Project title</option>
+                  <option value="lyrics">Lyrics</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Visual direction</span>
+                <textarea id="aiImagePrompt" rows="3" placeholder="Optional style, mood, setting, colors, or scene ideas"></textarea>
+              </label>
+              <button id="generateImageBtn" type="button">Generate Image</button>
+            </div>
             <div id="imageStrip" class="image-strip" aria-label="Uploaded image previews"></div>
           </div>
 

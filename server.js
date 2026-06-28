@@ -1,3 +1,4 @@
+// iFunSong local server: handles projects, uploads, lyric transcription, and MP4 rendering.
 const http = require("node:http");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
@@ -16,6 +17,8 @@ const FFPROBE_PATH = resolveMediaTool("ffprobe");
 const OPENAI_API_BASE_URL = process.env.OPENAI_API_BASE_URL || "https://api.openai.com/v1";
 const OPENAI_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
 const OPENAI_TRANSCRIPTION_URL = process.env.OPENAI_TRANSCRIPTION_URL || `${OPENAI_API_BASE_URL}/audio/transcriptions`;
+const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "gpt-image-1";
+const OPENAI_IMAGE_GENERATION_URL = process.env.OPENAI_IMAGE_GENERATION_URL || `${OPENAI_API_BASE_URL}/images/generations`;
 const LOCAL_TRANSCRIPTION_COMMAND = process.env.LOCAL_TRANSCRIPTION_COMMAND || "";
 const OPENAI_AUDIO_EXTENSIONS = new Set([".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".ogg", ".wav", ".webm"]);
 const OPENAI_DIRECT_AUDIO_MAX_BYTES = Number(process.env.OPENAI_DIRECT_AUDIO_MAX_BYTES || 24 * 1024 * 1024);
@@ -63,10 +66,12 @@ const DEFAULT_RENDER = {
   crf: 20
 };
 
+// Returns the current time as an ISO timestamp.
 function nowIso() {
   return new Date().toISOString();
 }
 
+// Loads environment variables from a local .env file.
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
   const raw = fs.readFileSync(filePath, "utf8");
@@ -83,6 +88,7 @@ function loadEnvFile(filePath) {
   }
 }
 
+// Loads optional CA certificates for outbound API requests.
 function loadExtraCaCerts() {
   // NODE_EXTRA_CA_CERTS is only honored by Node at process startup, before .env is
   // loaded. Re-read it here so a CA path set in .env actually takes effect for the
@@ -97,6 +103,7 @@ function loadExtraCaCerts() {
   }
 }
 
+// Configures fetch networking for proxies and TLS settings.
 function configureFetchNetwork() {
   const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
   const rejectUnauthorized = !["0", "false", "no"].includes(String(process.env.OPENAI_TLS_REJECT_UNAUTHORIZED || "true").toLowerCase());
@@ -130,6 +137,7 @@ function configureFetchNetwork() {
   }
 }
 
+// Hides credentials in a URL before returning it to clients.
 function redactUrl(value) {
   try {
     const url = new URL(value);
@@ -141,6 +149,7 @@ function redactUrl(value) {
   }
 }
 
+// Extracts useful network error details from fetch failures.
 function fetchErrorDetails(error) {
   const cause = error?.cause || {};
   return {
@@ -154,6 +163,7 @@ function fetchErrorDetails(error) {
   };
 }
 
+// Converts OpenAI network failures into HTTP errors.
 function openAINetworkError(error) {
   const details = fetchErrorDetails(error);
   const reason = [details.code, details.causeMessage || details.message].filter(Boolean).join(": ");
@@ -168,6 +178,7 @@ function openAINetworkError(error) {
   );
 }
 
+// Sends an OpenAI request with timeout and network error handling.
 async function fetchOpenAI(url, options) {
   try {
     return await fetch(url, {
@@ -179,6 +190,7 @@ async function fetchOpenAI(url, options) {
   }
 }
 
+// Parses a response body as JSON or preserves it as text.
 function parseResponsePayload(responseText) {
   try {
     return JSON.parse(responseText);
@@ -187,6 +199,7 @@ function parseResponsePayload(responseText) {
   }
 }
 
+// Produces a short summary from HTML or plain text content.
 function summarizeHtmlOrText(text) {
   const value = String(text || "");
   const title = value.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
@@ -200,6 +213,7 @@ function summarizeHtmlOrText(text) {
   return (title || description || stripped || value).slice(0, 500);
 }
 
+// Builds a clear HTTP error from an OpenAI API response.
 function openAIResponseError(status, fallback, payload) {
   const apiMessage = payload?.error?.message;
   if (apiMessage) return httpError(status, apiMessage, payload);
@@ -216,10 +230,12 @@ function openAIResponseError(status, fallback, payload) {
   return httpError(status, fallback, payload);
 }
 
+// Creates a short unique ID with the requested prefix.
 function makeId(prefix = "id") {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 }
 
+// Resolves the FFmpeg or FFprobe executable to use.
 function resolveMediaTool(tool) {
   const envName = tool === "ffmpeg" ? "FFMPEG_PATH" : "FFPROBE_PATH";
   if (process.env[envName]) return process.env[envName];
@@ -240,20 +256,24 @@ function resolveMediaTool(tool) {
   return tool;
 }
 
+// Sanitizes a filename while preserving its extension.
 function safeName(name) {
   const ext = path.extname(name || "").toLowerCase();
   const base = path.basename(name || "file", ext).replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "") || "file";
   return `${base.slice(0, 80)}${ext}`;
 }
 
+// Returns the filesystem directory for a project.
 function projectDir(projectId) {
   return path.join(PROJECTS_DIR, projectId);
 }
 
+// Returns the project metadata JSON path.
 function projectFile(projectId) {
   return path.join(projectDir(projectId), "project.json");
 }
 
+// Verifies that a target path stays inside a base directory.
 function ensureInside(base, target) {
   const resolvedBase = path.resolve(base);
   const resolvedTarget = path.resolve(target);
@@ -263,6 +283,7 @@ function ensureInside(base, target) {
   return resolvedTarget;
 }
 
+// Creates an Error object carrying HTTP response details.
 function httpError(status, message, details) {
   const error = new Error(message);
   error.status = status;
@@ -270,10 +291,12 @@ function httpError(status, message, details) {
   return error;
 }
 
+// Ensures required application directories exist.
 async function ensureDirs() {
   await fsp.mkdir(PROJECTS_DIR, { recursive: true });
 }
 
+// Sends a raw text, buffer, or JSON HTTP response.
 function send(res, status, body, headers = {}) {
   const payload = typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body, null, 2);
   res.writeHead(status, {
@@ -283,10 +306,12 @@ function send(res, status, body, headers = {}) {
   res.end(payload);
 }
 
+// Sends a JSON HTTP response.
 function sendJson(res, status, body) {
   send(res, status, body, { "Content-Type": "application/json; charset=utf-8" });
 }
 
+// Reads and parses a JSON request body with a size limit.
 async function readJsonBody(req, limitBytes = 180 * 1024 * 1024) {
   const chunks = [];
   let size = 0;
@@ -305,12 +330,14 @@ async function readJsonBody(req, limitBytes = 180 * 1024 * 1024) {
   }
 }
 
+// Reads a project JSON file from disk.
 async function readProject(projectId) {
   const file = ensureInside(PROJECTS_DIR, projectFile(projectId));
   const raw = await fsp.readFile(file, "utf8");
   return JSON.parse(raw);
 }
 
+// Writes a project JSON file and updates its timestamp.
 async function writeProject(project) {
   project.updatedAt = nowIso();
   await fsp.mkdir(projectDir(project.id), { recursive: true });
@@ -318,6 +345,7 @@ async function writeProject(project) {
   return project;
 }
 
+// Creates a new in-memory project model with defaults.
 function createProject(name = "Untitled song video") {
   const id = makeId("project");
   const time = nowIso();
@@ -338,6 +366,7 @@ function createProject(name = "Untitled song video") {
   };
 }
 
+// Lists saved projects for the project picker.
 async function listProjects() {
   await ensureDirs();
   const entries = await fsp.readdir(PROJECTS_DIR, { withFileTypes: true });
@@ -361,6 +390,7 @@ async function listProjects() {
   return projects;
 }
 
+// Checks whether an external media tool is available.
 function findTool(command) {
   const result = spawnSync(command, ["-version"], { encoding: "utf8", windowsHide: true });
   return {
@@ -370,10 +400,12 @@ function findTool(command) {
   };
 }
 
+// Returns the first non-empty line from a string.
 function firstLine(value) {
   return String(value || "").split(/\r?\n/).find(Boolean) || "";
 }
 
+// Runs a child process and captures its output.
 function runProcess(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { ...options, windowsHide: true });
@@ -393,6 +425,7 @@ function runProcess(command, args, options = {}) {
   });
 }
 
+// Reads media metadata with FFprobe when available.
 async function probeMedia(filePath) {
   const tool = findTool(FFPROBE_PATH);
   if (!tool.available) {
@@ -420,6 +453,7 @@ async function probeMedia(filePath) {
   }
 }
 
+// Looks for lyric-like tags in probed media metadata.
 function detectEmbeddedLyrics(tags = {}) {
   const keys = Object.keys(tags);
   const lyricKey = keys.find((key) => /lyrics|unsyncedlyrics|syncedlyrics|lyricist/i.test(key));
@@ -428,6 +462,7 @@ function detectEmbeddedLyrics(tags = {}) {
   return value ? { key: lyricKey, text: value } : null;
 }
 
+// Detects image dimensions for supported image formats.
 function parseImageDimensions(buffer, extension) {
   const ext = extension.toLowerCase();
   if (ext === ".png" && buffer.length >= 24 && buffer.toString("ascii", 1, 4) === "PNG") {
@@ -442,6 +477,7 @@ function parseImageDimensions(buffer, extension) {
   return { width: null, height: null };
 }
 
+// Reads JPEG dimensions from the image marker stream.
 function parseJpegDimensions(buffer) {
   let offset = 2;
   while (offset < buffer.length) {
@@ -456,6 +492,7 @@ function parseJpegDimensions(buffer) {
   return { width: null, height: null };
 }
 
+// Reads WebP dimensions from its container chunks.
 function parseWebpDimensions(buffer) {
   const chunk = buffer.toString("ascii", 12, 16);
   if (chunk === "VP8 " && buffer.length >= 30) {
@@ -480,6 +517,7 @@ function parseWebpDimensions(buffer) {
   return { width: null, height: null };
 }
 
+// Saves an uploaded base64 asset into the project folder.
 async function saveDataFile(project, kind, file) {
   if (!file?.name || !file?.data) {
     throw httpError(400, "Each uploaded file needs a name and base64 data.");
@@ -504,10 +542,42 @@ async function saveDataFile(project, kind, file) {
   };
 }
 
+// Saves a generated image buffer into the project image asset list.
+async function saveGeneratedImage(project, image) {
+  const assetDir = path.join(projectDir(project.id), "assets", "images");
+  await fsp.mkdir(assetDir, { recursive: true });
+  const originalName = safeName(image.name || `${project.name || "ai-image"}.png`).replace(/\.[^.]+$/, "") + ".png";
+  const storedName = `${makeId("images")}-${originalName}`;
+  const target = ensureInside(assetDir, path.join(assetDir, storedName));
+  await fsp.writeFile(target, image.buffer);
+  const relativePath = path.relative(projectDir(project.id), target).replace(/\\/g, "/");
+  const dimensions = parseImageDimensions(image.buffer, ".png");
+  return {
+    id: makeId("images"),
+    originalName,
+    storedName,
+    path: relativePath,
+    url: publicProjectAssetPath(project.id, relativePath),
+    mimeType: "image/png",
+    size: image.buffer.length,
+    width: dimensions.width,
+    height: dimensions.height,
+    generated: {
+      provider: "openai",
+      model: image.model,
+      prompt: image.prompt,
+      source: image.source,
+      createdAt: nowIso()
+    }
+  };
+}
+
+// Builds the API URL for a stored project asset.
 function publicProjectAssetPath(projectId, relativePath) {
   return `/api/projects/${encodeURIComponent(projectId)}/asset/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+// Formats milliseconds as an SRT or ASS timestamp.
 function msToClock(ms, separator = ",") {
   const totalMs = Math.max(0, Math.round(Number(ms) || 0));
   const hours = Math.floor(totalMs / 3600000);
@@ -517,6 +587,7 @@ function msToClock(ms, separator = ",") {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}${separator}${String(millis).padStart(3, "0")}`;
 }
 
+// Formats milliseconds as an LRC timestamp.
 function msToLrc(ms) {
   const totalCs = Math.max(0, Math.round((Number(ms) || 0) / 10));
   const minutes = Math.floor(totalCs / 6000);
@@ -525,10 +596,12 @@ function msToLrc(ms) {
   return `${pad(minutes)}:${pad(seconds)}.${String(centis).padStart(2, "0")}`;
 }
 
+// Pads a numeric value to two digits.
 function pad(value) {
   return String(value).padStart(2, "0");
 }
 
+// Converts timed lyric lines into SRT text.
 function lyricsToSrt(lines = []) {
   return lines
     .filter((line) => String(line.text || "").trim())
@@ -541,6 +614,7 @@ function lyricsToSrt(lines = []) {
     .concat("\n");
 }
 
+// Converts timed lyric lines into LRC text.
 function lyricsToLrc(lines = []) {
   return lines
     .filter((line) => String(line.text || "").trim())
@@ -549,6 +623,7 @@ function lyricsToLrc(lines = []) {
     .concat("\n");
 }
 
+// Normalizes word timing objects from transcript providers.
 function normalizeWordTimings(words) {
   if (!Array.isArray(words)) return undefined;
   const normalized = words
@@ -561,6 +636,7 @@ function normalizeWordTimings(words) {
   return normalized.length ? normalized : undefined;
 }
 
+// Normalizes editable lyric lines for project storage.
 function normalizeTimedLyrics(lines) {
   if (!Array.isArray(lines)) return [];
   return lines.map((line, index) => {
@@ -577,6 +653,7 @@ function normalizeTimedLyrics(lines) {
   });
 }
 
+// Spreads plain lyric text evenly across the audio duration.
 function splitLyricsToTimedLines(text, durationMs) {
   const lines = String(text || "")
     .split(/\r?\n/)
@@ -594,6 +671,7 @@ function splitLyricsToTimedLines(text, durationMs) {
   }));
 }
 
+// Splits lyric text into trimmed non-empty lines.
 function getLyricTextLines(text) {
   return String(text || "")
     .split(/\r?\n/)
@@ -601,11 +679,13 @@ function getLyricTextLines(text) {
     .filter(Boolean);
 }
 
+// Counts basic words in lyric or transcript text.
 function countWords(text) {
   const words = String(text || "").toLowerCase().match(/[a-z0-9'’]+/gi);
   return words ? words.length : 0;
 }
 
+// Attaches transcript word timings to matching lyric lines.
 function attachWordTimings(lines, words) {
   const normalized = normalizeWordTimings(words);
   if (!normalized) return lines;
@@ -616,6 +696,7 @@ function attachWordTimings(lines, words) {
   });
 }
 
+// Converts transcript segments into timed lyric lines.
 function segmentsToTimedLyrics(segments, fallbackDurationMs) {
   const normalized = (segments || [])
     .map((segment, index) => {
@@ -635,6 +716,7 @@ function segmentsToTimedLyrics(segments, fallbackDurationMs) {
   return splitLyricsToTimedLines("", fallbackDurationMs);
 }
 
+// Aligns pasted lyric lines to transcript segment timing.
 function alignLyricLinesToSegments(rawLyrics, segments, fallbackDurationMs) {
   const lyricLines = getLyricTextLines(rawLyrics);
   if (lyricLines.length === 0) return segmentsToTimedLyrics(segments, fallbackDurationMs);
@@ -694,6 +776,7 @@ function alignLyricLinesToSegments(rawLyrics, segments, fallbackDurationMs) {
   return result;
 }
 
+// Prepares project audio for OpenAI transcription upload.
 async function prepareAudioForOpenAI(project) {
   if (!project.audio) throw httpError(400, "Upload an audio file before extracting lyrics.");
   const originalPath = path.join(projectDir(project.id), project.audio.path);
@@ -732,6 +815,7 @@ async function prepareAudioForOpenAI(project) {
   };
 }
 
+// Transcribes project audio through the OpenAI API.
 async function transcribeWithOpenAI(project, options = {}) {
   const apiKey = String(options.apiKey || process.env.OPENAI_API_KEY || "").trim();
   if (!apiKey) {
@@ -778,6 +862,7 @@ async function transcribeWithOpenAI(project, options = {}) {
   }
 }
 
+// Verifies that an OpenAI API key can list models.
 async function checkOpenAIConnection(apiKey) {
   const key = String(apiKey || process.env.OPENAI_API_KEY || "").trim();
   if (!key) {
@@ -801,6 +886,97 @@ async function checkOpenAIConnection(apiKey) {
   };
 }
 
+// Chooses an OpenAI image size that matches the current project layout.
+function imageSizeForLayout(project, options = {}) {
+  const layout = options.layout || project.layout || DEFAULT_LAYOUT;
+  const ratio = (Number(layout.width) || DEFAULT_LAYOUT.width) / Math.max(1, Number(layout.height) || DEFAULT_LAYOUT.height);
+  if (ratio < 0.85) return "1024x1536";
+  if (ratio > 1.2) return "1536x1024";
+  return "1024x1024";
+}
+
+// Builds a visual prompt from the project title, lyrics, or both.
+function buildImagePrompt(project, options = {}) {
+  const source = ["title", "lyrics", "both"].includes(options.source) ? options.source : "both";
+  const title = String(options.title || project.name || "").trim();
+  const lyricText = String(options.rawLyrics || project.rawLyrics || (project.timedLyrics || []).map((line) => line.text).join("\n"))
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 24)
+    .join("\n");
+  const direction = String(options.prompt || "").trim();
+  const parts = [];
+
+  if ((source === "title" || source === "both") && title) {
+    parts.push(`Project title: ${title}`);
+  }
+  if ((source === "lyrics" || source === "both") && lyricText) {
+    parts.push(`Lyrics:\n${lyricText}`);
+  }
+  if (direction) {
+    parts.push(`Additional visual direction: ${direction}`);
+  }
+  if (parts.length === 0) {
+    throw httpError(400, "Add a project title, lyric text, or visual direction before generating an image.");
+  }
+
+  return [
+    "Create an original cover/background image for a music lyric video.",
+    "Use the supplied title and/or lyrics as mood, symbolism, color, and scene inspiration.",
+    "Do not include readable text, captions, logos, watermarks, or typography in the image.",
+    "Make it polished, cinematic, and suitable behind burned-in lyrics.",
+    parts.join("\n\n")
+  ].join("\n\n").slice(0, 4000);
+}
+
+// Generates a project background image with the OpenAI image API.
+async function generateImageWithOpenAI(project, options = {}) {
+  const apiKey = String(options.apiKey || process.env.OPENAI_API_KEY || "").trim();
+  if (!apiKey) {
+    throw httpError(400, "No OpenAI API key was provided. Enter one in the UI or set OPENAI_API_KEY.");
+  }
+
+  const model = String(options.model || OPENAI_IMAGE_MODEL).trim() || OPENAI_IMAGE_MODEL;
+  const source = ["title", "lyrics", "both"].includes(options.source) ? options.source : "both";
+  const prompt = buildImagePrompt(project, options);
+  const response = await fetchOpenAI(OPENAI_IMAGE_GENERATION_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      size: imageSizeForLayout(project, options),
+      quality: "auto",
+      output_format: "png"
+    })
+  });
+
+  const responseText = await response.text();
+  const payload = parseResponsePayload(responseText);
+  if (!response.ok) {
+    throw openAIResponseError(response.status, "OpenAI image generation request failed", payload);
+  }
+
+  const firstImage = Array.isArray(payload.data) ? payload.data[0] : null;
+  const b64 = firstImage?.b64_json;
+  if (!b64) {
+    throw httpError(502, "OpenAI image generation did not return image data.", payload);
+  }
+
+  return {
+    buffer: Buffer.from(b64, "base64"),
+    model,
+    prompt,
+    source,
+    usage: payload.usage || firstImage.usage || null
+  };
+}
+
+// Splits a local transcription command into executable arguments.
 function parseCommandLine(commandLine) {
   const args = [];
   const pattern = /"([^"]*)"|'([^']*)'|([^\s]+)/g;
@@ -811,6 +987,7 @@ function parseCommandLine(commandLine) {
   return args;
 }
 
+// Transcribes project audio using a configured local command.
 async function transcribeWithLocalCommand(project) {
   if (!LOCAL_TRANSCRIPTION_COMMAND.trim()) {
     throw httpError(400, "No local transcription command is configured. Set LOCAL_TRANSCRIPTION_COMMAND to enable local fallback.");
@@ -844,6 +1021,7 @@ async function transcribeWithLocalCommand(project) {
   }
 }
 
+// Chooses and runs the configured transcription provider.
 async function transcribeAudio(project, options = {}) {
   const provider = options.provider || "auto";
   const errors = [];
@@ -879,6 +1057,7 @@ async function transcribeAudio(project, options = {}) {
   throw httpError(400, `No transcription provider succeeded. ${errors.join(" ")}`.trim());
 }
 
+// Saves transcript metadata and generated subtitle files.
 async function saveTranscriptArtifacts(project, transcript, mode) {
   project.lyricMode = mode;
   project.transcription = {
@@ -891,6 +1070,7 @@ async function saveTranscriptArtifacts(project, transcript, mode) {
   await writeSubtitleFiles(project);
 }
 
+// Writes SRT and LRC subtitle exports for a project.
 async function writeSubtitleFiles(project) {
   const outDir = path.join(projectDir(project.id), "exports");
   await fsp.mkdir(outDir, { recursive: true });
@@ -901,6 +1081,7 @@ async function writeSubtitleFiles(project) {
   return { srtPath: path.join(outDir, "lyrics.srt"), lrcPath: path.join(outDir, "lyrics.lrc") };
 }
 
+// Converts CSS hex colors into ASS subtitle color values.
 function assColor(hex, alpha = 0) {
   const match = String(hex || "#ffffff").match(/^#?([0-9a-f]{6})$/i);
   const value = match ? match[1] : "ffffff";
@@ -911,10 +1092,12 @@ function assColor(hex, alpha = 0) {
   return `&H${a}${b}${g}${r}`;
 }
 
+// Escapes text so it can be safely written into ASS subtitles.
 function escapeAss(text) {
   return String(text || "").replace(/[{}]/g, "").replace(/\r?\n/g, "\\N");
 }
 
+// Splits lyric text into karaoke timing tokens.
 function splitKaraokeTokens(text) {
   const clean = String(text || "").replace(/\s+/g, " ").trim();
   if (!clean) return [];
@@ -925,6 +1108,7 @@ function splitKaraokeTokens(text) {
   return Array.from(clean);
 }
 
+// Builds karaoke timing segments for one lyric line.
 function karaokeSegments(line) {
   if (Array.isArray(line.words) && line.words.length > 0) {
     const segments = [];
@@ -945,6 +1129,7 @@ function karaokeSegments(line) {
   return tokens.map((token) => ({ text: token, durMs: perToken }));
 }
 
+// Converts one lyric line into ASS subtitle text.
 function lyricLineToAssText(line, style) {
   if (!style.karaoke) return escapeAss(line.text);
   const segments = karaokeSegments(line);
@@ -954,6 +1139,7 @@ function lyricLineToAssText(line, style) {
     .join("");
 }
 
+// Builds an ASS subtitle file for lyrics or text overlays.
 function lyricsToAss(project) {
   const layout = project.layout || DEFAULT_LAYOUT;
   const style = project.style || DEFAULT_STYLE;
@@ -992,6 +1178,7 @@ function lyricsToAss(project) {
   return `${lines.join("\n")}\n`;
 }
 
+// Writes the ASS subtitle file used during rendering.
 async function writeAssFile(project) {
   const outDir = path.join(projectDir(project.id), "exports");
   await fsp.mkdir(outDir, { recursive: true });
@@ -1000,10 +1187,12 @@ async function writeAssFile(project) {
   return assPath;
 }
 
+// Escapes a filesystem path for FFmpeg filter syntax.
 function ffmpegPathValue(filePath) {
   return filePath.replace(/\\/g, "/").replace(/:/g, "\\:");
 }
 
+// Creates the FFmpeg scale and crop filter for images.
 function makeScaleFilter(layout, fit) {
   const width = Number(layout.width) || 1920;
   const height = Number(layout.height) || 1080;
@@ -1013,6 +1202,7 @@ function makeScaleFilter(layout, fit) {
   return `scale=w=${width}:h=${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1`;
 }
 
+// Builds the FFmpeg arguments for rendering the MP4.
 function buildRenderArgs(project, assPath, outputPath) {
   const audioPath = path.join(projectDir(project.id), project.audio.path);
   const images = project.images || [];
@@ -1051,6 +1241,7 @@ function buildRenderArgs(project, assPath, outputPath) {
   return args;
 }
 
+// Renders a project into an MP4 video file.
 async function renderProject(project) {
   if (!project.audio) throw httpError(400, "Upload an audio file before rendering.");
   if (!project.images || project.images.length === 0) throw httpError(400, "Upload at least one image before rendering.");
@@ -1075,6 +1266,7 @@ async function renderProject(project) {
   return project.lastRender;
 }
 
+// Routes API requests for projects, assets, lyrics, and renders.
 async function handleApi(req, res, url) {
   const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
 
@@ -1086,6 +1278,7 @@ async function handleApi(req, res, url) {
       transcription: {
         openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
         defaultOpenAIModel: OPENAI_TRANSCRIPTION_MODEL,
+        defaultOpenAIImageModel: OPENAI_IMAGE_MODEL,
         localCommandConfigured: Boolean(LOCAL_TRANSCRIPTION_COMMAND),
         network: FETCH_NETWORK
       }
@@ -1161,7 +1354,7 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { project, audio: project.audio });
   }
 
-  if (req.method === "POST" && segments[3] === "images") {
+  if (req.method === "POST" && segments[3] === "images" && segments.length === 4) {
     const body = await readJsonBody(req);
     const files = Array.isArray(body.files) ? body.files : [];
     if (files.length === 0) throw httpError(400, "Upload at least one image.");
@@ -1187,6 +1380,25 @@ async function handleApi(req, res, url) {
     }
     await writeProject(project);
     return sendJson(res, 200, { project, images: savedImages });
+  }
+
+  if (req.method === "POST" && segments[3] === "images" && segments[4] === "generate") {
+    const body = await readJsonBody(req, 5 * 1024 * 1024);
+    const generated = await generateImageWithOpenAI(project, body);
+    const image = await saveGeneratedImage(project, {
+      ...generated,
+      name: `${project.name || "ai-image"}-ai.png`
+    });
+    project.images = [...(project.images || []), image];
+    if (project.layout?.mode === "auto") {
+      project.layout = suggestAutoLayout(project);
+    }
+    await writeProject(project);
+    return sendJson(res, 200, {
+      project,
+      image,
+      note: `Generated an image with OpenAI (${generated.model}).`
+    });
   }
 
   if (req.method === "DELETE" && segments[3] === "images" && segments[4]) {
@@ -1328,6 +1540,7 @@ async function handleApi(req, res, url) {
   throw httpError(404, "API route not found.");
 }
 
+// Chooses a project layout from uploaded image aspect ratios.
 function suggestAutoLayout(project) {
   const images = project.images || [];
   const ratios = images
@@ -1340,6 +1553,7 @@ function suggestAutoLayout(project) {
   return { ...DEFAULT_LAYOUT, mode: "auto", width: 1080, height: 1080 };
 }
 
+// Serves the frontend and public static assets.
 async function serveStatic(req, res, url) {
   const requested = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
   const filePath = ensureInside(PUBLIC_DIR, path.join(PUBLIC_DIR, requested));
@@ -1356,6 +1570,7 @@ async function serveStatic(req, res, url) {
   }
 }
 
+// Dispatches each HTTP request and serializes any errors.
 async function handleRequest(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);

@@ -9,6 +9,7 @@ iFunSong is a local web app for creating MP4 lyric/music videos from an audio fi
 The app can:
 
 - Upload audio and images.
+- Generate project background images with OpenAI from the song title or lyrics.
 - Rotate multiple images evenly across the song.
 - Extract lyrics from embedded metadata where available.
 - Transcribe lyrics with OpenAI when configured.
@@ -86,6 +87,7 @@ Images:
 ## OpenAI Setup
 
 OpenAI is optional, but required for AI-based lyric transcription/alignment unless you configure a local transcription command.
+It is also required for AI image generation.
 
 You can enter an OpenAI API key in the UI. It is stored only in browser `localStorage`, not in project JSON.
 
@@ -94,9 +96,11 @@ Or create a local `.env` file:
 ```env
 OPENAI_API_KEY=your_key_here
 OPENAI_TRANSCRIPTION_MODEL=whisper-1
+OPENAI_IMAGE_MODEL=gpt-image-1
 ```
 
 The default model is `whisper-1` because the app needs segment timestamps for line-by-line lyric timing.
+The default image model is `gpt-image-1`.
 
 ## Network Troubleshooting
 
@@ -179,6 +183,7 @@ Common options:
 ```env
 OPENAI_API_KEY=
 OPENAI_TRANSCRIPTION_MODEL=whisper-1
+OPENAI_IMAGE_MODEL=gpt-image-1
 OPENAI_DIRECT_AUDIO_MAX_BYTES=25165824
 HTTPS_PROXY=
 NODE_EXTRA_CA_CERTS=

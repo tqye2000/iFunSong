@@ -52,6 +52,16 @@ button:hover,
   border-color: var(--accent-strong);
 }
 
+button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+button:disabled:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
 .button-link.disabled {
   pointer-events: none;
   opacity: 0.5;
@@ -138,6 +148,38 @@ p {
   min-width: 230px;
 }
 
+.language-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+.language-link {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  min-height: auto;
+  padding: 0;
+  border-radius: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.language-link:hover {
+  background: transparent;
+  color: var(--accent-strong);
+}
+
+.language-link.active {
+  color: var(--ink);
+  cursor: default;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
@@ -212,6 +254,23 @@ p {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
   gap: 8px;
+}
+
+.ai-image-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.ai-image-panel textarea {
+  min-height: 78px;
+}
+
+.ai-image-panel button {
+  width: 100%;
 }
 
 .image-strip img {
